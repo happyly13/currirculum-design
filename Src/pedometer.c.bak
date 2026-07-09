@@ -1,0 +1,149 @@
+/**
+ * 计步器 — 自适应方差检测
+ *
+ * 原理: 走路时加速度的短期标准差远大于静止, 与个人习惯无关
+ * 检测链:
+ * 1. 三轴加速度取 L2 范数 → IIR 低通
+ * 2. 计算近 1 秒的短期方差 → 动态基线 + 阈值
+ * 3. 方差高于基线×2 → 确认在走路
+ * 4. 走路中用滤波信号的过零检测计步
+ */
+
+#include "pedometer.h"
+#include "cmsis_os.h"
+#include <math.h>
+
+/* 滤波 */
+#define ACC_ALPHA       0.5f
+#define GYR_ALPHA       0.7f
+
+/* 方差窗口: 1 秒 = 20 样本 (20Hz) */
+#define VAR_WIN_SIZE    20
+#define VAR_THRESHOLD   0.15f   /* 方差阈值 (m²/s⁴): 低于此 = 静止 */
+
+/* 步间隔 */
+#define INTERVAL_MIN    200
+#define INTERVAL_MAX    1000
+#define DEADBAND        0.4f
+
+/* 陀螺仪 */
+#define GYR_THRESHOLD   30.0f
+#define GYR_WINDOW_MS   500
+
+/* ── 内部状态 ── */
+static float    g_acc_filt;
+static float    g_gyr_filt;
+
+/* 方差计算: 环形缓冲 */
+static float    g_var_buf[VAR_WIN_SIZE];
+static uint8_t  g_var_idx;
+static uint8_t  g_var_filled;     /* 缓冲已填满? */
+static float    g_var_sum;        /* 滑动均值: sum(xi) */
+static float    g_var_baseline;   /* 静止基线方差 */
+
+/* 计步 */
+static uint32_t g_step_count;
+static uint32_t g_last_peak_tick;
+static float    g_acc_prev;       /* 上一帧滤波值, 用于过零检测 */
+static uint32_t g_gyr_last_tick;
+
+/* 走路标志 */
+static uint8_t  g_walking;
+
+/* ==================== 方差计算 ==================== */
+
+static float var_update(float sample) {
+    float old = g_var_buf[g_var_idx];
+    g_var_buf[g_var_idx] = sample;
+    g_var_sum += sample - old;
+    g_var_idx = (g_var_idx + 1) % VAR_WIN_SIZE;
+    if (g_var_filled < VAR_WIN_SIZE) g_var_filled++;
+
+    if (g_var_filled < 4) return 0.0f;  /* 数据不够 */
+
+    float mean    = g_var_sum / (float)g_var_filled;
+    float var_sum = 0.0f;
+    uint8_t n = g_var_filled;
+    for (uint8_t i = 0; i < n; i++)
+        var_sum += (g_var_buf[i] - mean) * (g_var_buf[i] - mean);
+    return var_sum / (float)n;
+}
+
+/* ==================== API ==================== */
+
+void Pedometer_Init(void) {
+    g_acc_filt     = 9.81f;
+    g_gyr_filt     = 0.0f;
+    g_var_idx      = 0;
+    g_var_filled   = 0;
+    g_var_sum      = 0.0f;
+    g_var_baseline = 0.0f;
+    g_step_count   = 0;
+    g_last_peak_tick = 0;
+    g_acc_prev     = 9.81f;
+    g_gyr_last_tick = 0;
+    g_walking      = 0;
+}
+
+void Pedometer_Reset(void) { g_step_count = 0; }
+uint32_t Pedometer_GetSteps(void) { return g_step_count; }
+
+/* ==================== 核心 ==================== */
+
+void Pedometer_Update(MPU6050_Accel_t *accel, MPU6050_Gyro_t *gyro) {
+    uint32_t now = osKernelSysTick();
+
+    /* 加速度幅值 */
+    float acc = sqrtf(accel->ax * accel->ax +
+                      accel->ay * accel->ay +
+                      accel->az * accel->az);
+    g_acc_filt = ACC_ALPHA * g_acc_filt + (1.0f - ACC_ALPHA) * acc;
+
+    /* 陀螺仪 */
+    float gyr = sqrtf(gyro->gx * gyro->gx +
+                      gyro->gy * gyro->gy +
+                      gyro->gz * gyro->gz);
+    g_gyr_filt = GYR_ALPHA * g_gyr_filt + (1.0f - GYR_ALPHA) * gyr;
+    if (g_gyr_filt > GYR_THRESHOLD) g_gyr_last_tick = now;
+
+    /* 短期方差 */
+    float var = var_update(g_acc_filt);
+
+    /* 静止时持续更新基线 */
+    uint8_t gyr_in_window = (now - g_gyr_last_tick < GYR_WINDOW_MS) ? 1 : 0;
+
+    if (!g_walking) {
+        /* 更新静止基线 */
+        if (var < VAR_THRESHOLD && var > 0.001f) {
+            g_var_baseline = 0.9f * g_var_baseline + 0.1f * var;
+        }
+        /* 方差突然升高 + 手臂有摆动 → 开始走路 */
+        if (var > g_var_baseline * 4.0f + VAR_THRESHOLD && gyr_in_window) {
+            g_walking = 1;
+            g_last_peak_tick = now;
+            g_acc_prev = g_acc_filt;
+        }
+    } else {
+        /* 方差降到接近基线 + 2s 无步 → 停止 */
+        if (var < g_var_baseline * 1.5f + VAR_THRESHOLD * 0.5f &&
+            now - g_last_peak_tick > 2000) {
+            g_walking = 0;
+        }
+    }
+
+    /* 走路中: 过零上升沿计步 */
+    if (g_walking) {
+        /* 用去均值做过零: 以当前均值为中心 */
+        float mean = g_var_sum / (float)g_var_filled;
+        float detrended = g_acc_filt - mean;
+
+        if (g_acc_prev < 0.0f && detrended >= 0.0f) {
+            int32_t dt = (int32_t)(now - g_last_peak_tick);
+            if (dt > INTERVAL_MIN && dt < INTERVAL_MAX) {
+                g_step_count++;
+                g_last_peak_tick = now;
+            }
+        }
+        g_acc_prev = detrended;
+    }
+}
