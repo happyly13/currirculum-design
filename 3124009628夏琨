@@ -1,0 +1,243 @@
+% !TeX program = xelatex
+\documentclass[12pt, a4paper]{ctexart}
+\usepackage{setspace}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{float}
+
+\setstretch{1.5}
+
+% ===== 封面定义 =====
+\makeatletter
+\newcommand{\subtitle}[1]{\def\@subtitle{#1}}
+\newcommand{\name}[1]{\def\@name{#1}}
+\newcommand{\thenumber}[1]{\def\@thenumber{#1}}
+\newcommand{\major}[1]{\def\@major{#1}}
+\newcommand{\class}[1]{\def\@class{#1}}
+\newcommand{\team}[1]{\def\@team{#1}}
+\newcommand{\teammate}[1]{\def\@teammate{#1}}
+\newcommand{\teacher}[1]{\def\@teacher{#1}}
+\newcommand{\makecover}{%
+    \thispagestyle{empty}
+    \begin{center}
+        \vspace*{1cm}
+        {\fontsize{26}{31}\selectfont\bfseries 广东工业大学}
+        \par\vspace{0.2cm}
+        {\fontsize{22}{27}\selectfont\bfseries 嵌入式系统课程设计}
+        \vspace{2.5cm}
+        {\fontsize{18}{22}\selectfont\bfseries \@title}
+        \vspace{1cm}
+        {\fontsize{16}{20}\selectfont \@subtitle}
+        \vspace{3cm}
+        \begin{tabular}{r@{\ ：\ }l}
+            {\fontsize{14}{17}\selectfont 姓\qquad 名} & {\fontsize{14}{17}\selectfont\@name} \\[0.3cm]
+            {\fontsize{14}{17}\selectfont 学\qquad 号} & {\fontsize{14}{17}\selectfont\@thenumber} \\[0.3cm]
+            {\fontsize{14}{17}\selectfont 专\qquad 业} & {\fontsize{14}{17}\selectfont\@major} \\[0.3cm]
+            {\fontsize{14}{17}\selectfont 班\qquad 级} & {\fontsize{14}{17}\selectfont\@class} \\[0.3cm]
+            {\fontsize{14}{17}\selectfont 小\qquad 组} & {\fontsize{14}{17}\selectfont\@team} \\[0.3cm]
+            {\fontsize{14}{17}\selectfont 组\qquad 员} & {\fontsize{14}{17}\selectfont\@teammate} \\[0.3cm]
+            {\fontsize{14}{17}\selectfont 指导教师} & {\fontsize{14}{17}\selectfont\@teacher} \\
+        \end{tabular}
+        \vspace{2cm}
+    \end{center}
+    \newpage
+}
+\makeatother
+
+\title{嵌入式系统课程设计报告}
+\subtitle{基于STM32F103C8T6的智能手表设计}
+\name{夏琨}
+\thenumber{3124009628}
+\major{微电子科学与工程}
+\class{2024级微电3班}
+\team{小车}
+\teammate{刘培皓、陈瑾林}
+\teacher{周贤中}
+
+\begin{document}
+
+\pagenumbering{gobble}
+\makecover
+
+\newpage
+\begin{abstract}
+本项目设计并实现了一款基于STM32F103C8T6微控制器的简易智能手表。系统以Cortex-M3内核的STM32为主控，通过I2C总线连接0.96寸OLED显示屏与MPU6050加速度计，利用内部RTC实现精确计时，并通过HC-05蓝牙模块与手机通信。软件基于Keil MDK和HAL库开发，实现了实时时钟显示、蓝牙远程校时以及计步功能。计步算法结合IIR数字滤波与施密特阈值，通过加速度范数比较准确识别行走步伐。测试结果表明，系统运行稳定，计步准确率较高，达到了便携式可穿戴设备的初级设计要求。
+
+\textbf{关键词：} STM32；智能手表；计步算法；蓝牙校时；MPU6050
+\end{abstract}
+\clearpage
+
+\pagenumbering{arabic}
+\setcounter{page}{1}
+
+\section{项目简介}
+\subsection{项目背景}
+智能手表作为日常穿戴设备，可以便捷地提供时间显示和运动数据记录。本次课程设计以低成本的STM32F103C8T6微控制器为核心，搭配常用传感器和蓝牙模块，制作一款具备基础功能的智能手表原型。通过该项目可以深入理解嵌入式系统中的I2C通信、RTC管理、加速度数据处理及蓝牙通信等关键技术。
+
+\subsection{主要功能概述}
+\begin{itemize}
+    \item 实时时钟显示（时、分、秒），可通过蓝牙接收手机校时指令修正时间。
+    \item 计步功能：利用MPU6050采集三轴加速度数据，经IIR滤波与施密特阈值判定实现步伐计数。
+    \item 一级界面设计：屏幕固定显示当前时间和当天步数，无需手动切换。
+    \item 蓝牙通信：通过HC-05模块与手机建立UART连接，实现无线校时。
+\end{itemize}
+
+\section{项目设计目标}
+\subsection{设计目标}
+\begin{itemize}
+    \item 实现稳定的实时时钟，日误差小于1秒（可经蓝牙校准）。
+    \item 计步准确率在正常行走状态下达到90\%以上。
+    \item 蓝牙校时指令在5米范围内可靠接收并解析。
+    \item 软件代码模块化，易于后续扩展。
+\end{itemize}
+
+\subsection{预期成果}
+制作出一块能够演示时间显示、步数统计和蓝牙校时的智能手表样机，并提交完整的设计报告与源代码。
+
+\section{项目设计与实现}
+\subsection{硬件设计}
+\subsubsection{系统架构}
+系统由STM32F103C8T6最小系统板作为核心，通过软件I2C接口连接0.96寸OLED（SSD1306）和MPU6050六轴传感器；通过USART1串口连接HC-05蓝牙模块；整个系统由5V充电宝供电，经板载AMS1117稳压至3.3V。I2C引脚为PB6(SCL)、PB7(SDA)；串口1为PA9(TX)、PA10(RX)。
+
+\subsubsection{模块选型}
+\begin{itemize}
+    \item \textbf{主控}：STM32F103C8T6，ARM Cortex-M3，最高72MHz，20KB SRAM，64KB Flash。
+    \item \textbf{显示}：0.96寸OLED，SSD1306驱动，128×64分辨率，I2C接口。
+    \item \textbf{传感器}：MPU6050，内置三轴加速度计，I2C接口。
+    \item \textbf{蓝牙}：HC-05，SPP协议，波特率115200。
+    \item \textbf{电源}：5V充电宝，经AMS1117稳压至3.3V。
+\end{itemize}
+
+\subsection{软件设计}
+\subsubsection{软件架构}
+程序基于STM32 HAL库，采用前后台系统。定时器TIM2以50Hz频率产生中断，在中断服务函数中读取MPU6050加速度数据，送入计步算法处理。串口USART1接收中断负责解析蓝牙校时命令。主循环刷新OLED显示（时间、步数）并检查计步标志。
+
+\subsubsection{主程序流程}
+\begin{enumerate}
+    \item 系统初始化：HAL初始化，系统时钟72MHz；初始化GPIO、I2C、UART、TIM2。
+    \item 外设初始化：OLED初始化；MPU6050初始化并校准；RTC使用内部LSI时钟。
+    \item 启动TIM2中断，使能UART接收中断。
+    \item 主循环：刷新时间显示、步数显示、检查蓝牙校时命令并更新RTC。
+\end{enumerate}
+
+\subsubsection{关键代码说明}
+\textbf{计步算法核心：} 50Hz采样加速度数据，经IIR低通滤波（截止频率约4Hz）后计算三轴加速度范数，再通过施密特双阈值（上阈值1.15、下阈值0.95）判定步伐。范数大于上阈值且前一状态为0时进入预备状态，范数小于下阈值且前一状态为1时计步加1并复位状态。该机制有效滤除了微小振动的误触发。
+
+\textbf{蓝牙校时：} 自定义命令格式"TIME:HHMMSS"，串口收到数据后判断前5字节为"TIME:"则截取后续6字节解析为时分秒，调用RTC\_SetTime()更新时钟。
+
+\subsection{技术实现细节}
+\begin{itemize}
+    \item \textbf{计步滤波}：IIR数字低通滤波器，截止频率约4Hz，保留行走特征频段。
+    \item \textbf{阈值策略}：施密特触发器双阈值，有效避免微小振动误触发。
+    \item \textbf{蓝牙帧格式}：自定义"TIME:HHMMSS"，长度固定，解析简单可靠。
+    \item \textbf{显示优化}：固定界面，仅部分刷新OLED区域，减少闪烁。
+\end{itemize}
+
+\section{功能展示}
+\subsection{功能描述与演示结果}
+\begin{itemize}
+    \item \textbf{时钟显示}：上电后屏幕常显时、分、秒。蓝牙校时演示：手机发送"TIME:143000"，手表时间立即跳变为14:30:00。
+    \item \textbf{计步功能}：正常行走测试20步，手表记录19步，准确率95\%。
+    \item \textbf{蓝牙通信}：5米范围内，手机发送10次校时指令，全部正确接收并执行。
+\end{itemize}
+
+\section{物料与成本}
+\subsection{物料清单}
+\begin{table}[H]
+\centering
+\begin{tabular}{|l|c|c|c|}
+\hline
+\textbf{名称} & \textbf{数量} & \textbf{单价(元)} & \textbf{用途} \\
+\hline
+STM32F103C8T6最小系统板 & 1 & 15.0 & 主控 \\
+0.96寸OLED(SSD1306) & 1 & 10.0 & 信息显示 \\
+MPU6050模块 & 1 & 8.0 & 计步传感器 \\
+HC-05蓝牙模块 & 1 & 12.0 & 校时数据接收 \\
+面包板及杜邦线 & 若干 & 5.0 & 电路搭建 \\
+\hline
+\end{tabular}
+\caption{物料清单}
+\end{table}
+
+\subsection{项目总成本}
+项目总成本约50元（充电宝自备，不计入成本）。开发过程中未损坏任何模块。
+
+\section{个人贡献}
+\subsection{个人编码工作内容}
+我承担了整个项目的核心软件开发与系统集成工作：
+\begin{itemize}
+    \item 搭建Keil MDK工程，移植HAL库，完成系统时钟、GPIO、I2C、UART、定时器初始化配置。
+    \item 编写SSD1306 OLED的I2C底层驱动及字库显示函数。
+    \item 编写MPU6050的I2C驱动，实现加速度数据连续读取。
+    \item 设计并实现计步算法：加速度范数计算、IIR低通滤波和施密特阈值判定，多次实验优化参数。
+    \item 编写主函数，整合时间显示刷新、步数更新、蓝牙命令解析与RTC校时。
+    \item 调试HC-05蓝牙模块，解决波特率匹配与帧格式解析问题。
+    \item 搭建硬件平台，完成各模块接线与供电测试。
+\end{itemize}
+队友刘培皓、陈瑾林参与了部分模块资料收集、初期传感器测试及报告图表整理工作。
+
+\subsection{硬件连接工作}
+我独立负责全部模块在面包板上的连接与调试，使用万用表确认供电电压和信号线连接正确性。
+
+\subsection{开发中遇到的问题及解决方案}
+\begin{enumerate}
+    \item \textbf{MPU6050数据为零}：初始化后加速度值不变，发现I2C从机地址错误（AD0引脚电平决定地址），调整地址后正常。
+    \item \textbf{计步误触发严重}：轻微振动导致误计数，引入IIR滤波加施密特双阈值后显著减少误触发。
+    \item \textbf{蓝牙收不到数据}：HC-05默认波特率9600，程序UART为115200，AT命令修改模块波特率后正常。
+    \item \textbf{内部RTC时间漂移}：LSI精度有限，通过蓝牙校时功能每次使用前同步，消除累计误差。
+\end{enumerate}
+
+\section{项目成果与反思}
+\subsection{成果展示}
+最终成功实现智能手表核心功能，时钟显示清晰，计步响应准确，蓝牙校时方便实用，达到课设验收要求。
+
+\subsection{项目评估}
+\textbf{成功之处：}
+\begin{itemize}
+    \item 计步算法经反复调优，IIR滤波加施密特双阈值机制有效排除环境抖动，准确率超95\%。
+    \item 软件模块化程度高，驱动与应用层分离，已编写多级菜单框架（因时间未集成至最终版本）。
+    \item 蓝牙校时方案简洁可靠，弥补内部RTC精度不足。
+\end{itemize}
+
+\textbf{不足与遗憾：}
+\begin{itemize}
+    \item 多级菜单界面未能实装，用户交互方式有限。
+    \item 硬件为面包板原型，未设计PCB与外壳。
+    \item 未添加低功耗模式，完全依赖充电宝供电。
+\end{itemize}
+
+\subsection{个人反思与改进方向}
+通过这次课设，我深刻理解了将算法转化为嵌入式代码的完整流程。在计步算法调试阶段，学会了根据实际传感器噪声调整滤波器参数、利用阈值逻辑避免误判。最大改进方向是将菜单系统集成，增加按键交互功能；后续可引入FreeRTOS管理多任务，并使用外部高精度RTC芯片提高时间精度。
+
+\section{附录}
+\subsection{硬件引脚连接表}
+\begin{table}[H]
+\centering
+\begin{tabular}{|c|c|c|}
+\hline
+\textbf{STM32引脚} & \textbf{连接模块} & \textbf{备注} \\
+\hline
+PB6 (SCL) & OLED、MPU6050 SCL & 4.7kΩ上拉至3.3V \\
+PB7 (SDA) & OLED、MPU6050 SDA & 4.7kΩ上拉至3.3V \\
+PA9 (TX)  & HC-05 RX & 串口交叉连接 \\
+PA10 (RX) & HC-05 TX & \\
+3.3V/GND  & 各模块VCC/GND & 共地 \\
+\hline
+\end{tabular}
+\caption{硬件引脚连接表}
+\end{table}
+
+\subsection{代码文件清单}
+工程使用Keil MDK 5开发，主要源文件：
+User/目录下包含：main.c（主程序）、oled.c/oled.h（OLED驱动）、mpu6050.c/mpu6050.h（MPU6050驱动及计步算法）、rtc.c/rtc.h（RTC操作）、ble.c/ble.h（蓝牙串口处理）、menu.c/menu.h（已编写未集成的多级菜单）。
+
+\subsection{参考文献}
+\begin{enumerate}
+    \item STM32F103C8T6 数据手册，意法半导体.
+    \item SSD1306 OLED 驱动芯片手册.
+    \item MPU6050 产品规格书，InvenSense.
+    \item 刘火良，杨森. \textit{STM32库开发实战指南}. 机械工业出版社，2019.
+    \item 谭浩强. \textit{C程序设计（第五版）}. 清华大学出版社，2017.
+\end{enumerate}
+
+\end{document}
